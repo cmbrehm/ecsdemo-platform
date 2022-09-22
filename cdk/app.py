@@ -2,9 +2,10 @@
 
 from constructs import Construct
 import os
+import aws_cdk as cdk
 from aws_cdk import (
     # Duration,
-    App, CfnOutput, Stack,
+    App, CfnOutput, Stack, Environment, Fn,
     aws_ec2 as ec2,
     aws_ecs as ecs,
     aws_iam as iam,
@@ -21,27 +22,27 @@ class BaseVPCStack(Stack):
         super().__init__(scope, construct_id, **kwargs)
 
         # This resource alone will create a private/public subnet in each AZ as well as nat/internet gateway(s)
-        vpc = ec2.Vpc(
+        self.vpc = ec2.Vpc(
             self, "ecs-workshop-vpc",
             cidr='10.0.0.0/24',
         )
 
         # Creating ECS Cluster in the VPC created above
-        ecs_cluster = ecs.Cluster(
+        self.ecs_cluster = ecs.Cluster(
             self, "ECSCluster",
-            vpc=vpc,
+            vpc=self.vpc,
             cluster_name="container-demo",
             container_insights=True
         )
 
         # Adding service discovery namespace to cluster
-        ecs_cluster.add_default_cloud_map_namespace(
+        self.ecs_cluster.add_default_cloud_map_namespace(
             name="service.local",
         )
         
         ###### CAPACITY PROVIDERS SECTION #####
         # Adding EC2 capacity to the ECS Cluster
-        # asg = ecs_cluster.add_capacity(
+        # asg = self.ecs_cluster.add_capacity(
         #    "ECSEC2Capacity",
         #    instance_type=ec2.InstanceType(instance_type_identifier='t3.small'),
         #    min_capacity=0,
@@ -58,7 +59,7 @@ class BaseVPCStack(Stack):
         ## In the meantime, CfnLaunchTemplate and CfnAutoScalingGroup resources are used to configure Spot capacity
         ## https://github.com/aws/aws-cdk/issues/6734
         
-        #ecs_spot_instance_role = iam.Role(
+        #self.ecs_spot_instance_role = iam.Role(
         #    self, "ECSSpotECSInstanceRole",
         #    assumed_by=iam.ServicePrincipal("ec2.amazonaws.com"),
         #    managed_policies=[
@@ -67,7 +68,7 @@ class BaseVPCStack(Stack):
         #        ]
         #)
         #
-        #ecs_spot_instance_profile = iam.CfnInstanceProfile(
+        #self.ecs_spot_instance_profile = iam.CfnInstanceProfile(
         #    self, "ECSSpotInstanceProfile",
         #    roles = [
         #            ecs_spot_instance_role.role_name
@@ -75,7 +76,7 @@ class BaseVPCStack(Stack):
         #    )
         #
         ## This creates a Launch Template for the Auto Scaling group
-        #lt = ec2.CfnLaunchTemplate(
+        #self.lt = ec2.CfnLaunchTemplate(
         #    self, "ECSEC2SpotCapacityLaunchTemplate",
         #    launch_template_data={
         #        "instanceType": "m5.large",
@@ -103,7 +104,7 @@ class BaseVPCStack(Stack):
         #        },
         #        launch_template_name="ECSEC2SpotCapacityLaunchTemplate")
         #        
-        #ecs_ec2_spot_mig_asg = autoscaling.CfnAutoScalingGroup(
+        #self.ecs_ec2_spot_mig_asg = autoscaling.CfnAutoScalingGroup(
         #    self, "ECSEC2SpotCapacity",
         #    min_size = "0",
         #    max_size = "10",
@@ -142,42 +143,42 @@ class BaseVPCStack(Stack):
         ##### END EC2 SPOT CAPACITY PROVIDER SECTION #####
         
         # Namespace details as CFN output
-        namespace_outputs = {
-            'ARN': ecs_cluster.default_cloud_map_namespace.private_dns_namespace_arn,
-            'NAME': ecs_cluster.default_cloud_map_namespace.private_dns_namespace_name,
-            'ID': ecs_cluster.default_cloud_map_namespace.private_dns_namespace_id,
+        self.namespace_outputs = {
+            'ARN': self.ecs_cluster.default_cloud_map_namespace.private_dns_namespace_arn,
+            'NAME': self.ecs_cluster.default_cloud_map_namespace.private_dns_namespace_name,
+            'ID': self.ecs_cluster.default_cloud_map_namespace.private_dns_namespace_id,
         }
         
         # Cluster Attributes
-        cluster_outputs = {
-            'NAME': ecs_cluster.cluster_name,
-            'SECGRPS': str(ecs_cluster.connections.security_groups)
+        self.cluster_outputs = {
+            'NAME': self.ecs_cluster.cluster_name,
+            'SECGRPS': str(self.ecs_cluster.connections.security_groups)
         }
         
         # When enabling EC2, we need the security groups "registered" to the cluster for imports in other service stacks
-        if ecs_cluster.connections.security_groups:
-            cluster_outputs['SECGRPS'] = str([x.security_group_id for x in ecs_cluster.connections.security_groups][0])
+        if self.ecs_cluster.connections.security_groups:
+            self.cluster_outputs['SECGRPS'] = str([x.security_group_id for x in self.ecs_cluster.connections.security_groups][0])
         
         # Frontend service to backend services on 3000
-        services_3000_sec_group = ec2.SecurityGroup(
+        self.services_3000_sec_group = ec2.SecurityGroup(
             self, "FrontendToBackendSecurityGroup",
             allow_all_outbound=True,
             description="Security group for frontend service to talk to backend services",
-            vpc=vpc
+            vpc=self.vpc
         )
         
         # Allow inbound 3000 from ALB to Frontend Service
-        sec_grp_ingress_self_3000 = ec2.CfnSecurityGroupIngress(
+        self.sec_grp_ingress_self_3000 = ec2.CfnSecurityGroupIngress(
             self, "InboundSecGrp3000",
             ip_protocol='TCP',
-            source_security_group_id=services_3000_sec_group.security_group_id,
+            source_security_group_id=self.services_3000_sec_group.security_group_id,
             from_port=3000,
             to_port=3000,
-            group_id=services_3000_sec_group.security_group_id
+            group_id=self.services_3000_sec_group.security_group_id
         )
         
         # Creating an EC2 bastion host to perform load test on private backend services
-        amzn_linux = ec2.MachineImage.latest_amazon_linux(
+        self.amzn_linux = ec2.MachineImage.latest_amazon_linux(
             generation=ec2.AmazonLinuxGeneration.AMAZON_LINUX_2,
             edition=ec2.AmazonLinuxEdition.STANDARD,
             virtualization=ec2.AmazonLinuxVirt.HVM,
@@ -196,29 +197,29 @@ class BaseVPCStack(Stack):
             user_data = f.read()
 
         # Instance creation
-        instance = ec2.Instance(
+        self.instance = ec2.Instance(
             self, "Instance",
             instance_name="{}-stresstool".format(stack_name),
             instance_type=ec2.InstanceType("t3.medium"),
-            machine_image=amzn_linux,
-            vpc = vpc,
+            machine_image=self.amzn_linux,
+            vpc = self.vpc,
             role = role,
             user_data=ec2.UserData.custom(user_data),
-            security_group=services_3000_sec_group
+            security_group=self.services_3000_sec_group
         )
         
         # App Mesh Configuration
         # appmesh()
         
         # All Outputs required for other stacks to build
-        CfnOutput(self, "NSArn", value=namespace_outputs['ARN'], export_name="NSARN")
-        CfnOutput(self, "NSName", value=namespace_outputs['NAME'], export_name="NSNAME")
-        CfnOutput(self, "NSId", value=namespace_outputs['ID'], export_name="NSID")
-        CfnOutput(self, "FE2BESecGrp", value=services_3000_sec_group.security_group_id, export_name="SecGrpId")
-        CfnOutput(self, "ECSClusterName", value=cluster_outputs['NAME'], export_name="ECSClusterName")
-        CfnOutput(self, "ServicesSecGrp", value=services_3000_sec_group.security_group_id, export_name="ServicesSecGrp")
-        CfnOutput(self, "StressToolEc2Id",value=instance.instance_id)
-        CfnOutput(self, "StressToolEc2Ip",value=instance.instance_private_ip)
+        CfnOutput(self, "NSArn", value=self.namespace_outputs['ARN'], export_name="NSARN")
+        CfnOutput(self, "NSName", value=self.namespace_outputs['NAME'], export_name="NSNAME")
+        CfnOutput(self, "NSId", value=self.namespace_outputs['ID'], export_name="NSID")
+        CfnOutput(self, "FE2BESecGrp", value=self.services_3000_sec_group.security_group_id, export_name="SecGrpId")
+        CfnOutput(self, "ECSClusterName", value=self.cluster_outputs['NAME'], export_name="ECSClusterName")
+        CfnOutput(self, "ServicesSecGrp", value=self.services_3000_sec_group.security_group_id, export_name="ServicesSecGrp")
+        CfnOutput(self, "StressToolEc2Id",value=self.instance.instance_id)
+        CfnOutput(self, "StressToolEc2Ip",value=self.instance.instance_private_ip)
     
     
     
@@ -226,13 +227,13 @@ class BaseVPCStack(Stack):
     def appmesh(self):
         
         # This will create the app mesh (control plane)
-        mesh = appmesh.Mesh(self,"EcsWorkShop-AppMesh", mesh_name="ecs-mesh")
+        self.mesh = appmesh.Mesh(self,"EcsWorkShop-AppMesh", mesh_name="ecs-mesh")
         
         # We will create a App Mesh Virtual Gateway
-        mesh_vgw = appmesh.VirtualGateway(
+        self.mesh_vgw = appmesh.VirtualGateway(
             self,
             "Mesh-VGW",
-            mesh=mesh,
+            mesh=self.mesh,
             listeners=[appmesh.VirtualGatewayListener.http(
                 port=3000
                 )],
@@ -241,7 +242,7 @@ class BaseVPCStack(Stack):
         
         # Creating the mesh gateway task for the frontend app
         # For more info related to App Mesh Proxy check https://docs.aws.amazon.com/app-mesh/latest/userguide/getting-started-ecs.html
-        mesh_gw_proxy_task_def = ecs.FargateTaskDefinition(
+        self.mesh_gw_proxy_task_def = ecs.FargateTaskDefinition(
             self,
             "mesh-gw-proxy-taskdef",
             cpu=256,
@@ -250,14 +251,14 @@ class BaseVPCStack(Stack):
         )
 
         # LogGroup for the App Mesh Proxy Task
-        logGroup = logs.LogGroup(self,"ecsworkshopMeshGateway",
+        self.logGroup = logs.LogGroup(self,"ecsworkshopMeshGateway",
             #log_group_name="ecsworkshop-mesh-gateway",
             retention=logs.RetentionDays.ONE_WEEK
         )
         
         # App Mesh Virtual Gateway Envoy proxy Task definition
         # For a use specific ECR region, please check https://docs.aws.amazon.com/app-mesh/latest/userguide/envoy.html
-        container = mesh_gw_proxy_task_def.add_container(
+        container = self.mesh_gw_proxy_task_def.add_container(
             "mesh-gw-proxy-contdef",
             image=ecs.ContainerImage.from_registry("public.ecr.aws/appmesh/aws-appmesh-envoy:v1.18.3.0-prod"),
             container_name="envoy",
@@ -267,12 +268,12 @@ class BaseVPCStack(Stack):
                 "ENVOY_LOG_LEVEL": "info",
                 "ENABLE_ENVOY_STATS_TAGS": "1",
                 # "ENABLE_ENVOY_XRAY_TRACING": "1",
-                "APPMESH_RESOURCE_ARN": mesh_vgw.virtual_gateway_arn
+                "APPMESH_RESOURCE_ARN": self.mesh_vgw.virtual_gateway_arn
             },
             essential=True,
             logging=ecs.LogDriver.aws_logs(
                 stream_prefix='/mesh-gateway',
-                log_group=logGroup
+                log_group=self.logGroup
             ),
             health_check=ecs.HealthCheck(
                 command=["CMD-SHELL","curl -s http://localhost:9901/server_info | grep state | grep -q LIVE"],
@@ -287,7 +288,7 @@ class BaseVPCStack(Stack):
         )
         
         #appmesh-xray-uncomment
-        # xray_container = mesh_gw_proxy_task_def.add_container(
+        # xray_container = self.mesh_gw_proxy_task_def.add_container(
         #     "FrontendServiceXrayContdef",
         #     image=ecs.ContainerImage.from_registry("amazon/aws-xray-daemon"),
         #     logging=ecs.LogDriver.aws_logs(
@@ -308,7 +309,7 @@ class BaseVPCStack(Stack):
         #appmesh-xray-uncomment
         
         # For environment variables check https://docs.aws.amazon.com/app-mesh/latest/userguide/envoy-config.html
-        mesh_gateway_proxy_fargate_service = ecs_patterns.NetworkLoadBalancedFargateService(
+        self.mesh_gateway_proxy_fargate_service = ecs_patterns.NetworkLoadBalancedFargateService(
             self,
             "MeshGW-Proxy-Fargate-Service",
             service_name='mesh-gw-proxy',
@@ -317,22 +318,22 @@ class BaseVPCStack(Stack):
             desired_count=1,
             listener_port=80,
             assign_public_ip=True,
-            task_definition=mesh_gw_proxy_task_def,
+            task_definition=self.mesh_gw_proxy_task_def,
             cluster=BaseVPCStack.ecs_cluster,
             public_load_balancer=True,
             cloud_map_options=ecs.CloudMapOptions(
-                cloud_map_namespace=ecs_cluster.default_cloud_map_namespace,
+                cloud_map_namespace=self.ecs_cluster.default_cloud_map_namespace,
                 name='mesh-gw-proxy'
             )
         )
         
         # For testing purposes we will open any ipv4 requests to port 3000
-        mesh_gateway_proxy_fargate_service.service.connections.allow_from_any_ipv4(
+        self.mesh_gateway_proxy_fargate_service.service.connections.allow_from_any_ipv4(
             port_range=ec2.Port(protocol=ec2.Protocol.TCP, string_representation="vtw_proxy", from_port=3000, to_port=3000),
             description="Allow NLB connections on port 3000"
         )
         
-        mesh_gw_proxy_task_def.default_container.add_ulimits(ecs.Ulimit(
+        self.mesh_gw_proxy_task_def.default_container.add_ulimits(ecs.Ulimit(
             hard_limit=15000,
             name=ecs.UlimitName.NOFILE,
             soft_limit=15000
@@ -340,29 +341,29 @@ class BaseVPCStack(Stack):
         )
         
         #Adding necessary policies for Envoy proxy to communicate with required services
-        mesh_gw_proxy_task_def.execution_role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("AmazonEC2ContainerRegistryReadOnly"))
-        mesh_gw_proxy_task_def.execution_role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("CloudWatchLogsFullAccess"))
+        self.mesh_gw_proxy_task_def.execution_role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("AmazonEC2ContainerRegistryReadOnly"))
+        self.mesh_gw_proxy_task_def.execution_role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("CloudWatchLogsFullAccess"))
         
-        mesh_gw_proxy_task_def.task_role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("CloudWatchFullAccess"))
+        self.mesh_gw_proxy_task_def.task_role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("CloudWatchFullAccess"))
         # mesh_gw_proxy_task_def.task_role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("AWSXRayDaemonWriteAccess"))
-        mesh_gw_proxy_task_def.task_role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("AWSAppMeshEnvoyAccess"))
+        self.mesh_gw_proxy_task_def.task_role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("AWSAppMeshEnvoyAccess"))
         
-        mesh_gw_proxy_task_def.execution_role.add_to_policy(
+        self.mesh_gw_proxy_task_def.execution_role.add_to_policy(
             iam.PolicyStatement(
                 actions=['ec2:DescribeSubnets'],
                 resources=['*']
             )
         )
         
-        CfnOutput(self, "MeshGwNlbDns",value=mesh_gateway_proxy_fargate_service.load_balancer.load_balancer_dns_name,export_name="MeshGwNlbDns")
-        CfnOutput(self, "MeshArn",value=mesh.mesh_arn,export_name="MeshArn")
-        CfnOutput(self, "MeshName",value=mesh.mesh_name,export_name="MeshName")
-        CfnOutput(self, "MeshEnvoyServiceArn",value=mesh_gateway_proxy_fargate_service.service.service_arn,export_name="MeshEnvoyServiceArn")
-        CfnOutput(self, "MeshVGWArn",value=mesh_vgw.virtual_gateway_arn,export_name="MeshVGWArn")
-        CfnOutput(self, "MeshVGWName",value=mesh_vgw.virtual_gateway_name,export_name="MeshVGWName")
+        CfnOutput(self, "MeshGwNlbDns",value=self.mesh_gateway_proxy_fargate_service.load_balancer.load_balancer_dns_name,export_name="MeshGwNlbDns")
+        CfnOutput(self, "MeshArn",value=self.mesh.mesh_arn,export_name="MeshArn")
+        CfnOutput(self, "MeshName",value=self.mesh.mesh_name,export_name="MeshName")
+        CfnOutput(self, "MeshEnvoyServiceArn",value=self.mesh_gateway_proxy_fargate_service.service.service_arn,export_name="MeshEnvoyServiceArn")
+        CfnOutput(self, "MeshVGWArn",value=self.mesh_vgw.virtual_gateway_arn,export_name="MeshVGWArn")
+        CfnOutput(self, "MeshVGWName",value=self.mesh_vgw.virtual_gateway_name,export_name="MeshVGWName")
 
-
+_env = Environment(account=os.getenv('AWS_ACCOUNT_ID'), region=os.getenv('AWS_DEFAULT_REGION'))
 stack_name = "ecsworkshop-base"
 app = App()
-BaseVPCStack(app, stack_name)
+BaseVPCStack(app, stack_name, env=_env)
 app.synth()
