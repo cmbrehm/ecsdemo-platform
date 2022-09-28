@@ -23,7 +23,7 @@ class BaseVPCStack(Stack):
 
         # This resource alone will create a private/public subnet in each AZ as well as nat/internet gateway(s)
         self.vpc = ec2.Vpc(
-            self, "ecs-workshop-vpc",
+            self, "BaseVPC",
             cidr='10.0.0.0/24',
         )
 
